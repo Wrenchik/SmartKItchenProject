@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <p>
+      <a href="/fridges_ui">🏠 Кухни</a> |
+      <a href="/products_ui">📦 Продукты</a> |
+      <a href="/orders_ui">🛒 Покупки</a>
+        <a href="/equipment_ui">🍽 Посуда</a> |
+    </p>
+
+    <title>Умная кухня</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f6f8;
+            padding: 40px;
+        }
+        .container {
+            max-width: 700px;
+            margin: auto;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+        }
+        textarea {
+            width: 100%;
+            height: 80px;
+            font-size: 16px;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        button {
+            margin-top: 15px;
+            padding: 10px 20px;
+            font-size: 16px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #43a047;
+        }
+        .result {
+            margin-top: 25px;
+            padding: 15px;
+            background: #eef2f5;
+            border-radius: 8px;
+            white-space: pre-wrap;
+        }
+        .error {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🍳 Умная кухня</h1>
+    <p>Введите запрос на естественном языке:</p>
+
+    <textarea id="textInput">Мне на вечеринку из 3 человек нужно что-то приготовить на 1 кухне</textarea>
+    <button onclick="sendRequest()">Подобрать блюдо</button>
+
+    <div id="result" class="result"></div>
+</div>
+
+<script>
+async function sendRequest() {
+    const text = document.getElementById("textInput").value;
+    const resultDiv = document.getElementById("result");
+
+    resultDiv.innerHTML = "⏳ Обработка запроса...";
+
+    try {
+        const response = await fetch("/text_request", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({text: text})
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            resultDiv.innerHTML = "❌ Ошибка: " + data.detail;
+            return;
+        }
+
+        let output = "📌 Система поняла запрос:\n";
+        output += `• Людей: ${data.parsed_request.people}\n`;
+        output += `• Тип приёма пищи: ${data.parsed_request.meal_type}\n`;
+        output += `• Кухни: ${data.parsed_request.fridge_ids}\n\n`;
+
+        output += "🍽 Результат:\n";
+        output += `• Блюдо: ${data.recommendation.recipe}\n`;
+
+        if (data.recommendation.can_cook === false && data.recommendation.missing_equipment) {
+            output += "❌ Нельзя приготовить блюдо\n";
+            output += "Не хватает посуды:\n";
+            data.recommendation.missing_equipment.forEach(e => {
+                output += `• ${e}\n`;
+            });
+        } else {
+            output += `• Можно приготовить: Да\n`;
+
+            if (data.recommendation.missing && Object.keys(data.recommendation.missing).length > 0) {
+                output += "\n🛒 Не хватает продуктов:\n";
+                for (let key in data.recommendation.missing) {
+                    output += `• ${key}: ${data.recommendation.missing[key]}\n`;
+                }
+                output += `\nЗаказ № ${data.recommendation.order_id} оформлен`;
+            } else {
+                output += "\n✅ Все продукты и посуда есть";
+            }
+        }
+
+        resultDiv.innerText = output;
+
+
+    } catch (e) {
+        resultDiv.innerHTML = "<span class='error'>Ошибка соединения с сервером</span>";
+    }
+}
+</script>
+
+</body>
+</html>

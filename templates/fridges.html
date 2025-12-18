@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Кухни / холодильники</title>
+    <style>
+        body { font-family: Arial; background: #f4f6f8; padding: 30px; }
+        .box {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            max-width: 600px;
+            margin: auto;
+        }
+        input, button {
+            width: 100%;
+            padding: 8px;
+            margin: 6px 0;
+            font-size: 14px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover { background: #43a047; }
+        ul { padding-left: 20px; }
+    </style>
+</head>
+<body>
+<div style="margin-bottom: 20px;">
+    <a href="/" style="
+        display: inline-block;
+        padding: 8px 14px;
+        background: #1976d2;
+        color: white;
+        text-decoration: none;
+        border-radius: 6px;
+        font-weight: bold;
+    ">
+        🏠 Главное меню
+    </a>
+</div>
+<div class="box">
+    <h2>🏠 Кухни / холодильники</h2>
+
+    <input id="owner" placeholder="Название кухни (например: Кухня 1 этаж)">
+    <button onclick="createFridge()">Создать кухню</button>
+
+    <h3>📋 Существующие кухни</h3>
+    <ul id="list"></ul>
+</div>
+
+<script>
+async function loadFridges() {
+    const res = await fetch("/fridges");
+    const data = await res.json();
+    const ul = document.getElementById("list");
+    ul.innerHTML = "";
+
+    if (data.length === 0) {
+        ul.innerHTML = "<li>Кухонь пока нет</li>";
+        return;
+    }
+
+    data.forEach(f => {
+        ul.innerHTML += `<li>ID ${f.id} — ${f.owner}</li>`;
+    });
+}
+
+async function createFridge() {
+    if (!owner.value) {
+        alert("Введите название кухни");
+        return;
+    }
+
+    await fetch("/fridges", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ owner: owner.value })
+    });
+
+    owner.value = "";
+    loadFridges();
+}
+
+loadFridges();
+</script>
+
+</body>
+</html>

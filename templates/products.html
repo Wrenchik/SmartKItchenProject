@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Продукты в холодильнике</title>
+    <style>
+        body { font-family: Arial; background: #f4f6f8; padding: 30px; }
+        .box { background: white; padding: 20px; border-radius: 10px; max-width: 600px; margin: auto; }
+        input, select, button {
+            width: 100%; padding: 8px; margin: 6px 0; font-size: 14px;
+        }
+        button { background: #4CAF50; color: white; border: none; cursor: pointer; }
+        button:hover { background: #43a047; }
+        ul { padding-left: 20px; }
+    </style>
+</head>
+<body>
+<div style="margin-bottom: 20px;">
+    <a href="/" style="
+        display: inline-block;
+        padding: 8px 14px;
+        background: #1976d2;
+        color: white;
+        text-decoration: none;
+        border-radius: 6px;
+        font-weight: bold;
+    ">
+        🏠 Главное меню
+    </a>
+
+<div class="box">
+    <h2>➕ Добавить продукт в холодильник</h2>
+
+    <select id="fridges" multiple size="4"></select>
+    <select id="product"></select>
+    <input id="qty" placeholder="Количество">
+    <input id="unit" placeholder="Ед. измерения (кг / шт)">
+
+
+    <button onclick="addProduct()">Добавить</button>
+
+    <h3>📦 Текущий инвентарь</h3>
+    <button onclick="loadInventory()">🔄 Показать выбранные кухни</button>
+    <ul id="list"></ul>
+</div>
+
+<script>
+
+  let productsMap = {};
+
+async function loadProductsMap() {
+    const res = await fetch("/products");
+    const data = await res.json();
+    productsMap = {};
+    data.forEach(p => {
+        productsMap[p.id] = p.name;
+    });
+}
+async function loadConsolidated() {
+    const ids = selectedFridgeIds();
+    if (!ids) return;
+
+    const res = await fetch(`/inventory/consolidated?fridge_ids=${ids}`);
+    const data = await res.json();
+
+    list.innerHTML = "";
+    data.consolidated.forEach(i => {
+        list.innerHTML += `
+            <li>
+                📦 ${i.product} — ${i.total_quantity} ${i.unit}
+            </li>`;
+    });
+}
+
+async function loadInventory() {
+    const ids = selectedFridgeIds();
+    if (!ids) {
+        list.innerHTML = "<li>Выберите хотя бы одну кухню</li>";
+        return;
+    }
+
+    await loadProductsMap();
+
+    const res = await fetch(`/inventory?fridge_ids=${ids}`);
+    const data = await res.json();
+    list.innerHTML = "";
+
+    if (data.length === 0) {
+        list.innerHTML = "<li>В выбранных кухнях нет продуктов</li>";
+        return;
+    }
+
+    data.forEach(i => {
+        list.innerHTML += `
+        <li>
+            🧊 Кухня ${i.fridge_id} —
+            🍎 ${productsMap[i.product_id]} —
+            <input type="number" value="${i.quantity}" step="0.1"
+                   style="width:60px"
+                   onchange="updateItem(${i.id}, this.value)">
+            ${i.unit}
+            <button onclick="deleteItem(${i.id})">🗑</button>
+        </li>`;
+    });
+}
+
+async function loadFridges() {
+    const res = await fetch("/fridges");
+    const data = await res.json();
+    fridges.innerHTML = "";
+
+    data.forEach(f => {
+        fridges.innerHTML += `
+            <option value="${f.id}">
+                ${f.owner} (id=${f.id})
+            </option>`;
+    });
+}
+
+function selectedFridgeIds() {
+    return Array.from(fridges.selectedOptions)
+        .map(o => o.value)
+        .join(",");
+}
+
+async function loadProducts() {
+    const res = await fetch("/products");
+    const data = await res.json();
+    product.innerHTML = "";
+    data.forEach(p => {
+        product.innerHTML += `<option value="${p.id}">${p.name} (id=${p.id})</option>`;
+    });
+}
+
+
+async function addProduct() {
+    const fridgeIds = Array.from(fridges.selectedOptions).map(o => o.value);
+
+    if (fridgeIds.length === 0) {
+        alert("Выберите хотя бы одну кухню");
+        return;
+    }
+    if (!product.value) {
+        alert("Выберите продукт");
+        return;
+    }
+    if (!qty.value || Number(qty.value) <= 0) {
+        alert("Введите корректное количество");
+        return;
+    }
+    if (!unit.value.trim()) {
+        alert("Введите единицу измерения");
+        return;
+    }
+
+    for (let fid of fridgeIds) {
+        const res = await fetch("/inventory", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                fridge_id: Number(fid),
+                product_id: Number(product.value),
+                quantity: Number(qty.value),
+                unit: unit.value.trim()
+            })
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            alert("Ошибка добавления: " + JSON.stringify(err));
+            return;
+        }
+    }
+
+    qty.value = "";
+    unit.value = "";
+    loadInventory();
+}
+
+async function updateItem(id, qty) {
+    await fetch(`/inventory/${id}?quantity=${qty}`, {
+        method: "PUT"
+    });
+}
+
+async function deleteItem(id) {
+    if (!confirm("Удалить продукт из холодильника?")) return;
+
+    await fetch(`/inventory/${id}`, {
+        method: "DELETE"
+    });
+    loadInventory();
+}
+
+loadFridges();
+loadProducts();
+loadInventory();
+</script>
+
+
+</body>
+</html>

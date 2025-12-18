@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Посуда</title>
+    <style>
+        body { font-family: Arial; background: #f4f6f8; padding: 30px; }
+        .box { background: white; padding: 20px; border-radius: 10px; max-width: 700px; margin: auto; }
+        input, select, button {
+            width: 100%; padding: 8px; margin: 6px 0; font-size: 14px;
+        }
+        button { background: #4CAF50; color: white; border: none; cursor: pointer; }
+        button:hover { background: #43a047; }
+        ul { padding-left: 20px; }
+    </style>
+</head>
+<body>
+
+<!-- КНОПКА ГЛАВНОГО МЕНЮ -->
+<div style="margin-bottom:20px;">
+    <a href="/" style="
+        display:inline-block;
+        padding:8px 14px;
+        background:#1976d2;
+        color:white;
+        text-decoration:none;
+        border-radius:6px;
+        font-weight:bold;">
+        🏠 Главное меню
+    </a>
+</div>
+
+<div class="box">
+    <h2>🍽 Посуда</h2>
+
+    <h3>➕ Добавить посуду</h3>
+
+    <select id="fridges" multiple size="4"></select>
+    <input id="name" placeholder="Название (сковорода, нож)">
+    <input id="qty" type="number" placeholder="Количество">
+
+    <button onclick="addEquipment()">Добавить</button>
+
+    <hr>
+
+    <h3>📦 Посуда в выбранных кухнях</h3>
+
+    <button onclick="loadEquipment()">🔄 Показать</button>
+    <button onclick="loadConsolidated()">📊 Суммарно</button>
+
+    <ul id="list"></ul>
+</div>
+
+<script>
+async function loadFridges() {
+    const res = await fetch("/fridges");
+    const data = await res.json();
+    fridges.innerHTML = "";
+
+    data.forEach((f, index) => {
+        fridges.innerHTML += `
+            <option value="${f.id}" ${index === 0 ? "selected" : ""}>
+                ${f.owner} (id=${f.id})
+            </option>`;
+    });
+}
+
+
+function selectedFridgeIds() {
+    return Array.from(fridges.selectedOptions)
+        .map(o => o.value)
+        .join(",");
+}
+
+async function addEquipment() {
+    const ids = Array.from(fridges.selectedOptions).map(o => o.value);
+
+    if (ids.length === 0) {
+        alert("Выберите хотя бы одну кухню");
+        return;
+    }
+    if (!name.value.trim()) {
+        alert("Введите название посуды");
+        return;
+    }
+    if (!qty.value || Number(qty.value) <= 0) {
+        alert("Введите корректное количество");
+        return;
+    }
+
+    for (let id of ids) {
+        await fetch("/equipment", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                fridge_id: Number(id),
+                name: name.value.trim(),
+                quantity: parseInt(qty.value)
+            })
+        });
+    }
+
+    name.value = "";
+    qty.value = "";
+    loadEquipment();
+}
+
+async function loadEquipment() {
+    const ids = selectedFridgeIds();
+    if (!ids) {
+        list.innerHTML = "<li>Выберите кухни</li>";
+        return;
+    }
+
+    const res = await fetch(`/equipment?fridge_ids=${ids}`);
+    const data = await res.json();
+    list.innerHTML = "";
+
+    if (data.length === 0) {
+        list.innerHTML = "<li>Посуды нет</li>";
+        return;
+    }
+
+    data.forEach(e => {
+        list.innerHTML += `
+        <li>
+            🧊 Кухня ${e.fridge_id} —
+            🍽 ${e.name} —
+            ${e.quantity} шт
+            <button onclick="deleteEquipment(${e.id})"
+                style="margin-left:10px;background:#e53935;color:white;border:none;border-radius:4px;">
+                🗑
+            </button>
+        </li>`;
+    });
+}
+
+async function loadConsolidated() {
+    const ids = selectedFridgeIds();
+    if (!ids) return;
+
+    const res = await fetch(`/equipment?fridge_ids=${ids}`);
+    const data = await res.json();
+
+    const map = {};
+    data.forEach(e => {
+        map[e.name] = (map[e.name] || 0) + e.quantity;
+    });
+
+    list.innerHTML = "";
+    for (let k in map) {
+        list.innerHTML += `<li>📦 ${k}: ${map[k]} шт</li>`;
+    }
+}
+
+async function deleteEquipment(id) {
+    if (!confirm("Удалить посуду?")) return;
+    await fetch(`/equipment/${id}`, { method: "DELETE" });
+    loadEquipment();
+}
+
+loadFridges();
+</script>
+
+</body>
+</html>

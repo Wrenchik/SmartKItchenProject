@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Список покупок</title>
+    <style>
+        body { font-family: Arial; background: #f4f6f8; padding: 30px; }
+        .box { background: white; padding: 20px; border-radius: 10px; max-width: 700px; margin: auto; }
+        button { margin-left: 10px; background: #e53935; color: white; border: none; padding: 5px 10px; }
+    </style>
+</head>
+<body>
+<div style="margin-bottom: 20px;">
+    <a href="/" style="
+        display: inline-block;
+        padding: 8px 14px;
+        background: #1976d2;
+        color: white;
+        text-decoration: none;
+        border-radius: 6px;
+        font-weight: bold;
+    ">
+        🏠 Главное меню
+    </a>
+</div>
+
+<div class="box">
+    <h2>🛒 Список покупок</h2>
+    <ul id="orders"></ul>
+</div>
+
+<script>
+async function loadOrders() {
+    const res = await fetch("/orders");
+    const data = await res.json();
+    const ul = document.getElementById("orders");
+    ul.innerHTML = "";
+
+    data.forEach(o => {
+        ul.innerHTML += `
+          <li>
+            🧾 Заказ #${o.id}: ${o.items}
+            <button onclick="deleteOrder(${o.id})">Удалить</button>
+          </li>`;
+    });
+}
+
+async function deleteOrder(id) {
+    await fetch(`/orders/${id}`, { method: "DELETE" });
+    loadOrders();
+}
+
+loadOrders();
+</script>
+
+</body>
+</html>
