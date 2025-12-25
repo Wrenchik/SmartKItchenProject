@@ -8,12 +8,18 @@ import re
 from fastapi.templating import Jinja2Templates
 from fastapi import Request
 import random
-
+from sqlalchemy import func
 # ensure models are imported so metadata exists (if not already created)
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Smart Kitchen")
 templates = Jinja2Templates(directory="templates")
+
+COURSE_KEYWORDS = {
+    "first": ["суп", "борщ", "щи"],
+    "second": ["курица", "макароны", "картофель", "рис"],
+    "drink": ["компот", "чай", "напит"]
+}
 
 @app.get("/ui")
 def ui(request: Request):
@@ -277,14 +283,14 @@ def recommend(req: schemas.RecommendRequest, db: Session = Depends(get_db)):
 def text_request(req: schemas.TextRequest, db: Session = Depends(get_db)):
     text = req.text.lower()
 
-    # 1. Извлечение количества человек
+    # 1. Людей
     people = 1
-    m = re.search(r"(\d+)\s*(человек|человека|людей)", text)
+    m = re.search(r"(\d+)\s*(-х)?\s*(человек|человека|людей)", text)
     if m:
         people = int(m.group(1))
 
     # 2. Тип приёма пищи
-    if "вечеринк" in text:
+    if "вечеринк" in text or "вечеринка" in text:
         meal_type = "party"
     elif "завтрак" in text:
         meal_type = "breakfast"
@@ -293,31 +299,39 @@ def text_request(req: schemas.TextRequest, db: Session = Depends(get_db)):
     elif "ужин" in text:
         meal_type = "dinner"
     else:
-        meal_type = "breakfast"  # по умолчанию
+        meal_type = "breakfast"
 
-    # 3. Кухня / холодильник
+    # 3. Курсы (для обеда)
+    courses = []
+    if meal_type == "lunch":
+        if "перв" in text or "суп" in text or "первое" in text:
+            courses.append("first")
+        if "втор" in text or "второе" in text:
+            courses.append("second")
+        if "компот" in text or "напит" in text or "чай" in text:
+            courses.append("drink")
+
+    # 4. кухня
     fridge_ids = [1]
-    m = re.search(r"(\d+)\s*кухн", text)
-    if m:
-        fridge_ids = [int(m.group(1))]
+    m2 = re.search(r"(\d+)\s*кухн", text)
+    if m2:
+        fridge_ids = [int(m2.group(1))]
 
-    # 4. Используем уже реализованную логику рекомендации
-    recommend_request = schemas.RecommendRequest(
-        fridge_ids=fridge_ids,
-        people=people,
-        meal_type=meal_type
-    )
+    recommend_request = schemas.RecommendRequest(fridge_ids=fridge_ids, people=people, meal_type=meal_type)
 
-    result = recommend(recommend_request, db)
+    if meal_type == "lunch" and courses:
+        recommendation = recommend_multi(recommend_request, courses, db)
+    else:
+        # одиночный рецепт
+        recommendation = recommend_one(recommend_request, db)
+        if recommendation is None:
+            recommendation = {"recipe": None, "missing": {}, "can_cook": False, "used_fast_products": 0, "missing_equipment": []}
 
     return {
-        "parsed_request": {
-            "people": people,
-            "meal_type": meal_type,
-            "fridge_ids": fridge_ids
-        },
-        "recommendation": result
+        "parsed_request": {"people": people, "meal_type": meal_type, "fridge_ids": fridge_ids},
+        "recommendation": recommendation
     }
+
 
 @app.post("/equipment", response_model=schemas.Equipment)
 def add_equipment(item: schemas.EquipmentCreate, db: Session = Depends(get_db)):
@@ -368,3 +382,160 @@ def delete_inventory(item_id: int, db: Session = Depends(get_db)):
     db.delete(item)
     db.commit()
     return {"status": "deleted"}
+
+
+def recommend_one(
+    req: schemas.RecommendRequest,
+    db: Session,
+    name_filters: Optional[List[str]] = None
+):
+    """
+    Возвращает dict:
+    {
+      "recipe": <string>,            # название рецепта или None
+      "missing": {prod: qty, ...},  # недостающие продукты
+      "can_cook": bool,
+      "used_fast_products": int,
+      "missing_equipment": [names]
+    }
+    """
+    # 1) рецепты нужного типа
+    recipes = db.query(models.Recipe).filter(models.Recipe.meal_type == req.meal_type).all()
+    if not recipes:
+        return None
+
+    # 2) фильтрация по ключевым словам (если заданы)
+    if name_filters:
+        lowered = [k.lower() for k in name_filters]
+        recipes = [r for r in recipes if any(k in (r.name or "").lower() for k in lowered)]
+        # если после фильтрации пусто — не возвращаем сразу None, дадим возможность fallback на вызывающей стороне
+    if not recipes:
+        return None
+
+    # 3) собрать доступную посуду (учесть регистр и пробелы)
+    eq_rows = (
+        db.query(models.Equipment.name, func.sum(models.Equipment.quantity))
+        .filter(models.Equipment.fridge_id.in_(req.fridge_ids))
+        .group_by(models.Equipment.name)
+        .all()
+    )
+    # держим lower->qty
+    available_eq = { (r[0] or "").strip().lower(): r[1] for r in eq_rows }
+
+    # 4) консолидированный инвентарь (product.name -> qty) и perishability
+    inv_rows = (
+        db.query(models.Product.name, models.Product.perishability, func.sum(models.Inventory.quantity))
+        .join(models.Inventory, models.Product.id == models.Inventory.product_id)
+        .filter(models.Inventory.fridge_id.in_(req.fridge_ids))
+        .group_by(models.Product.name, models.Product.perishability)
+        .all()
+    )
+    inventory = {}
+    perishability = {}
+    for name, p, qty in inv_rows:
+        inventory[name] = float(qty)
+        perishability[name] = p
+
+    # 5) проверяем рецепты
+    candidates = []
+    for recipe in recipes:
+        # посуда
+        missing_equipment = []
+        needed_eq = []
+        if recipe.required_equipment:
+            needed_eq = [e.strip().lower() for e in recipe.required_equipment.split(",") if e.strip()]
+            for e in needed_eq:
+                if available_eq.get(e, 0) < 1:
+                    missing_equipment.append(e)
+
+        # если не хватает посуды — пропускаем (или можно возвращать как "нельзя", но для простоты пропускаем)
+        if missing_equipment:
+            # помечаем, но не отбрасываем — пусть вызывающая логика решит
+            pass
+
+        # продукты
+        scale = req.people / (recipe.servings if recipe.servings else 1)
+        ingredients = db.query(models.RecipeIngredient).filter(models.RecipeIngredient.recipe_id == recipe.id).all()
+
+        missing = {}
+        fast_used = 0
+        for ing in ingredients:
+            needed = ing.quantity * scale
+            available = inventory.get(ing.product, 0.0)
+            if available < needed - 1e-9:  # небольшое допускаемое
+                missing[ing.product] = round(needed - available, 2)
+            if perishability.get(ing.product) == "fast":
+                fast_used += 1
+
+        candidates.append({
+            "recipe": recipe,
+            "missing": missing,
+            "fast_used": fast_used,
+            "missing_equipment": missing_equipment
+        })
+
+    if not candidates:
+        return None
+
+    # приоритет — максимум fast-продуктов (как раньше)
+    max_fast = max(c["fast_used"] for c in candidates)
+    best = [c for c in candidates if c["fast_used"] == max_fast]
+
+    # случайный выбор из лучших
+    chosen = random.choice(best)
+
+    # результат в строгом формате
+    return {
+        "recipe": (chosen["recipe"].name if chosen["recipe"] else None),
+        "missing": chosen["missing"],
+        "can_cook": len(chosen["missing"]) == 0 and len(chosen["missing_equipment"]) == 0,
+        "used_fast_products": chosen["fast_used"],
+        "missing_equipment": chosen["missing_equipment"]
+    }
+
+
+# --- multi-recommend для lunch с несколькими курсами ---
+def recommend_multi(req: schemas.RecommendRequest, courses: List[str], db: Session):
+    """
+    courses: list of keys like ["first","second","drink"]
+    Возвращает:
+    {
+      "courses": {course_key: recipe_name or "Не удалось подобрать блюдо"},
+      "missing": {product: qty},
+      "can_cook": bool,
+      "order_id": int|None
+    }
+    """
+    total_missing = {}
+    courses_out = {}
+    failed = False
+
+    for course in courses:
+        filters = COURSE_KEYWORDS.get(course, [])  # COURSE_KEYWORDS — словарь ключевых слов
+        # пробуем сначала с фильтром
+        res = recommend_one(req, db, name_filters=filters)
+        # fallback — пробуем без фильтра (чтобы не возвращать "Не удалось" сразу)
+        if not res:
+            res = recommend_one(req, db, name_filters=None)
+        if not res:
+            courses_out[course] = "Не удалось подобрать блюдо"
+            failed = True
+            continue
+
+        # всегда кладём название (строка)
+        courses_out[course] = res["recipe"] or "Не удалось подобрать блюдо"
+
+        # аккумулируем missing
+        for p, q in (res["missing"] or {}).items():
+            total_missing[p] = total_missing.get(p, 0) + q
+
+    order_id = None
+    if total_missing:
+        order = models.Order(items=str(total_missing))
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+        order_id = order.id
+
+    can_cook = (not failed) and len(total_missing) == 0
+    return {"courses": courses_out, "missing": total_missing, "can_cook": can_cook, "order_id": order_id}

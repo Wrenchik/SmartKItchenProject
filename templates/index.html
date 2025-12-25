@@ -98,7 +98,29 @@ async function sendRequest() {
         output += `• Кухни: ${data.parsed_request.fridge_ids}\n\n`;
 
         output += "🍽 Результат:\n";
-        output += `• Блюдо: ${data.recommendation.recipe}\n`;
+
+        const rec = data.recommendation;
+
+        // --- ЕСЛИ НЕСКОЛЬКО БЛЮД (обед: первое, второе, напиток) ---
+        if (rec.courses) {
+            output += "Состав приёма пищи:\n";
+
+            const courseNames = {
+                first: "🥣 Первое блюдо",
+                second: "🍗 Второе блюдо",
+                drink: "🥤 Напиток"
+            };
+
+            for (let key in rec.courses) {
+                const title = courseNames[key] || key;
+                output += `• ${title}: ${rec.courses[key]}\n`;
+            }
+        }
+        // --- ЕСЛИ ОДНО БЛЮДО ---
+        else if (rec.recipe) {
+            output += `• Блюдо: ${rec.recipe}\n`;
+        }
+
 
         if (data.recommendation.can_cook === false && data.recommendation.missing_equipment) {
             output += "❌ Нельзя приготовить блюдо\n";
@@ -107,7 +129,8 @@ async function sendRequest() {
                 output += `• ${e}\n`;
             });
         } else {
-            output += `• Можно приготовить: Да\n`;
+           output += `• Можно приготовить: ${rec.can_cook ? "Да" : "Нет"}\n`;
+
 
             if (data.recommendation.missing && Object.keys(data.recommendation.missing).length > 0) {
                 output += "\n🛒 Не хватает продуктов:\n";
